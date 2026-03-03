@@ -159,6 +159,17 @@ slip_dot_out, = ax_power.plot(current_slip, motor.output_power(current_slip),
 ax_power.legend(loc='upper right', fontsize=8)
 
 # ============================================
+# 힘벡터용 사전 계산 (이중 회전자계 분리)
+# ============================================
+T_fwd_val = motor.forward_torque(current_slip)
+T_bwd_val = motor.backward_torque(current_slip)
+T_net_val = T_fwd_val - T_bwd_val
+
+# 힘 화살표 스케일링: 최대 화살표 길이 ≈ 0.3
+max_force_per_bar = 2 * T_fwd_val / n_rotor_bars + 0.01
+force_vis_scale = 0.3 / max_force_per_bar
+
+# ============================================
 # 애니메이션 업데이트 함수
 # ============================================
 def update(frame):
@@ -193,40 +204,44 @@ def update(frame):
         artist.remove()
     force_artists = []
     
-    # --- 도선 전류 계산 및 표시 ---
-    currents = []
-    for i, angle in enumerate(rotor_angles):
+    # --- 도선별 전류 및 힘 계산 ---
+    for i, alpha in enumerate(rotor_angles):
         # 도선 위치 업데이트
         rotor_dots[i].set_data([rotor_x[i]], [rotor_y[i]])
         
-        # 유도 전류 계산: 자계 변화에 의한 기전력
-        # 슬립에 비례하고, 자계와 도선 위치 관계에 따라 달라짐
-        relative_angle = theta_field - angle
-        induced_current = current_slip * np.sin(relative_angle)
-        currents.append(induced_current)
+        # 전류 계산 (자계와 도선의 상대적 위치 기반)
+        I_val = np.sin(theta_field - alpha)
         
         # 전류 방향에 따른 색상
-        if induced_current > 0.02:
+        if I_val > 0.15:
             rotor_dots[i].set_color('red')      # ⊙ 전류 나옴
-        elif induced_current < -0.02:
+        elif I_val < -0.15:
             rotor_dots[i].set_color('blue')     # ⊗ 전류 들어감
         else:
             rotor_dots[i].set_color('gray')
         
-        # --- 힘 벡터 (F = I × B) ---
-        # 힘 크기 = 전류 × 자계(x성분)
-        force_magnitude = currents[i] * sum_x * 4  # 스케일링
+        # --- 이중 회전자계 기반 힘 계산 ---
+        # 정방향 자계: 도선 근처에서 CCW 방향 힘 (항상 ≥ 0)
+        # cos²(θ_fwd - α) 패턴: 자계 피크 위치에서 최대
+        f_fwd = 1 + np.cos(2 * (theta_field - alpha))  # 0~2, 평균 1
         
-        if abs(force_magnitude) > 0.01:  # 작은 힘은 생략
-            # 힘 방향: 접선 방향 (반시계 양)
-            tangent_x = -np.sin(angle)
-            tangent_y = np.cos(angle)
+        # 역방향 자계: 도선 근처에서 CW 방향 힘 (항상 ≥ 0)
+        f_bwd = 1 + np.cos(2 * (theta_field + alpha))  # 0~2, 평균 1
+        
+        # 순 접선방향 힘 (양=CCW=정방향)
+        # T_fwd > T_bwd이므로 대부분 양수 → 모터 동작!
+        F_tang = (T_fwd_val * f_fwd - T_bwd_val * f_bwd) / n_rotor_bars
+        
+        if abs(F_tang) > 0.01:
+            # 접선 방향 단위 벡터 (CCW)
+            tangent_x = -np.sin(alpha)
+            tangent_y = np.cos(alpha)
             
-            # 화살표 그리기
-            arrow = ax_motor.arrow(rotor_x[i], rotor_y[i],
-                                   force_magnitude * tangent_x * 0.5,
-                                   force_magnitude * tangent_y * 0.5,
-                                   head_width=0.06, head_length=0.03,
+            dx = F_tang * tangent_x * force_vis_scale
+            dy = F_tang * tangent_y * force_vis_scale
+            
+            arrow = ax_motor.arrow(rotor_x[i], rotor_y[i], dx, dy,
+                                   head_width=0.05, head_length=0.025,
                                    fc='orange', ec='darkorange', linewidth=1.5,
                                    zorder=10)
             force_artists.append(arrow)
@@ -269,9 +284,9 @@ total_frames = frames_per_cycle * n_field_cycles
 
 ani = FuncAnimation(fig, update, frames=total_frames, interval=50, blit=False)
 
-# GIF 저장
-print(f"GIF 저장 중... (자계 {n_field_cycles}주기, 총 {total_frames}프레임)")
-ani.save('induction_motor.gif', writer='pillow', fps=20)
-print("GIF 저장 완료: induction_motor.gif")
+# # GIF 저장
+# print(f"GIF 저장 중... (자계 {n_field_cycles}주기, 총 {total_frames}프레임)")
+# ani.save('induction_motor.gif', writer='pillow', fps=20)
+# print("GIF 저장 완료: induction_motor.gif")
 
 plt.show()
